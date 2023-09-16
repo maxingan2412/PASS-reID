@@ -7,6 +7,7 @@ from utils.meter import AverageMeter
 from utils.metrics import R1_mAP_eval
 from torch.cuda import amp
 import torch.distributed as dist
+from tqdm import tqdm
 
 def do_train(cfg,
              model,
@@ -164,11 +165,11 @@ def do_inference(cfg,
     model.eval()
     img_path_list = []
 
-    for n_iter, (img, pid, camid, camids, target_view, imgpath) in enumerate(val_loader):
+    for n_iter, (img, pid, camid, camids, target_view, imgpath) in enumerate(tqdm(val_loader)):
         with torch.no_grad():
-            img = img.to(device)
-            camids = camids.to(device)
-            target_view = target_view.to(device)
+            img = img.to(device) # [N, 3, 256, 128]
+            camids = camids.to(device) # tensor [N]
+            target_view = target_view.to(device) # tensor [N]
             feat = model(img, cam_label=camids, view_label=target_view)
             evaluator.update((feat, pid, camid))
             img_path_list.extend(imgpath)

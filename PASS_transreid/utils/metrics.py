@@ -124,8 +124,19 @@ class R1_mAP_eval():
             distmat = re_ranking(qf, gf, k1=20, k2=6, lambda_value=0.3)
 
         else:
+            print('=> Reranking results')
+            distmat_rerank = re_ranking(qf, gf, k1=20, k2=6, lambda_value=0.3)
+            cmc_rerank, mAP_rerank = eval_func(distmat_rerank, q_pids, g_pids, q_camids, g_camids)
+            print('mAP rerank {:.1%}'.format(mAP_rerank))
+            for r in [1, 5, 10]:
+                print("CMC rerank curve, Rank-{:<3}:{:.1%}".format(r, cmc_rerank[r - 1]))
+
+
+
+
             print('=> Computing DistMat with euclidean_distance')
             distmat = euclidean_distance(qf, gf)
+
         cmc, mAP = eval_func(distmat, q_pids, g_pids, q_camids, g_camids)
 
         return cmc, mAP, distmat, self.pids, self.camids, qf, gf

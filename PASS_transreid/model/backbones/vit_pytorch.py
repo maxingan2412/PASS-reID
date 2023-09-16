@@ -317,9 +317,9 @@ class TransReID(nn.Module):
 
     def forward_features(self, x, camera_id, view_id):
         B = x.shape[0]
-        x = self.patch_embed(x)
+        x = self.patch_embed(x) # x [bs,128,768]
 
-        cls_tokens = self.cls_token.expand(B, -1, -1)  # stole cls_tokens impl from Phil Wang, thanks
+        cls_tokens = self.cls_token.expand(B, -1, -1)  # stole cls_tokens impl from Phil Wang, thanks [bs,1,768]
         part_tokens1 = self.part_token1.expand(B, -1, -1)
         part_tokens2 = self.part_token2.expand(B, -1, -1)
         part_tokens3 = self.part_token3.expand(B, -1, -1)
@@ -332,7 +332,7 @@ class TransReID(nn.Module):
         elif self.view_num > 0:
             x = x + self.pos_embed + self.sie_xishu * self.sie_embed[view_id]
         else:
-            x = x + torch.cat((self.cls_pos, self.part1_pos, self.part2_pos, self.part3_pos, self.pos_embed), dim=1)
+            x = x + torch.cat((self.cls_pos, self.part1_pos, self.part2_pos, self.part3_pos, self.pos_embed), dim=1) #前四个是 1 1 768 后面是 1 128 768  一共是 1 132 768
 
         x = self.pos_drop(x)
 

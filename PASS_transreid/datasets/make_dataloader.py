@@ -63,7 +63,7 @@ def make_dataloader(cfg):
     view_num = dataset.num_train_vids
 
     if cfg.DATALOADER.SAMPLER in ['softmax_triplet', 'img_triplet']:
-        print('using img_triplet sampler')
+        print(f'using {cfg.DATALOADER.SAMPLER} sampler')
         if cfg.MODEL.DIST_TRAIN:
             print('DIST_TRAIN START')
             mini_batch_size = cfg.SOLVER.IMS_PER_BATCH // dist.get_world_size()

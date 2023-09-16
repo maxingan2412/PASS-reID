@@ -288,7 +288,7 @@ class build_transformer_pass(nn.Module):
         self.in_planes = self.base.in_planes
         if pretrain_choice == 'imagenet':
             self.base.load_param(model_path,hw_ratio=cfg.MODEL.PRETRAIN_HW_RATIO)
-            print('Loading pretrained ImageNet model......from {}'.format(model_path))
+            print(f'Loading pretrained {pretrain_choice} model......from {model_path}')
 
         self.num_classes = num_classes
         
@@ -315,7 +315,7 @@ class build_transformer_pass(nn.Module):
         else:
             if self.feat_fusion == 'cat':
                 self.classifier = nn.Linear(self.in_planes*2, self.num_classes, bias=False)
-                self.classifier.apply(weights_init_classifier)
+                self.classifier.apply(weights_init_classifier) #见笔记 09161
             
             if self.feat_fusion == 'mean':
                 self.classifier = nn.Linear(self.in_planes, self.num_classes, bias=False)
