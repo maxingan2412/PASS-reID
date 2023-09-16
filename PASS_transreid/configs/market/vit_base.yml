@@ -1,5 +1,6 @@
 MODEL:
-  PRETRAIN_PATH: '../../model/vit_small_lup.pth'
+#  PRETRAIN_PATH: '../../model/vit_small_lup.pth'
+  PRETRAIN_PATH: '../pretrainedlup_model/pass_vit_base_full.pth'
   PRETRAIN_HW_RATIO: 2
   METRIC_LOSS_TYPE: 'triplet'
   IF_LABELSMOOTH: 'off'
@@ -23,7 +24,8 @@ INPUT:
 
 DATASETS:
   NAMES: ('market1501')
-  ROOT_DIR: ('/userhome/zhukuan/data/')
+  #ROOT_DIR: ('/userhome/zhukuan/data/')
+  ROOT_DIR: ('../data/')
 
 DATALOADER:
   SAMPLER: 'softmax_triplet'
@@ -53,4 +55,5 @@ TEST:
   NECK_FEAT: 'before'
   FEAT_NORM: 'yes'
 
-OUTPUT_DIR: '../../log/transreid/market/vit_base_lup'
+#OUTPUT_DIR: '../../log/transreid/market/vit_base_lup'
+OUTPUT_DIR: 'log/transreid/market/vit_base_lup'

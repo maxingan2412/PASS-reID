@@ -2,7 +2,16 @@ import math
 import os.path as osp
 import torch
 from torch import nn as nn
-from torch._six import container_abcs
+# from torch._six import container_abcs
+
+TORCH_MAJOR = int(torch.__version__.split('.')[0])
+TORCH_MINOR = int(torch.__version__.split('.')[1])
+if TORCH_MAJOR == 1 and TORCH_MINOR < 8:
+    from torch._six import container_abcs
+else:
+    import collections.abc as container_abcs
+
+
 from functools import partial
 from itertools import repeat
 from torch.nn import functional as F

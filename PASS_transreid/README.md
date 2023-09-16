@@ -41,3 +41,13 @@ If you find this code useful for your research, please cite our paper
     pages     = {15013-15022}
 }
 ```
+msmt17 测试 
+```bash
+python test.py --config_file configs/msmt17/vit_base.yml MODEL.DEVICE_ID "('0')" TEST.WEIGHT pre_trained_model/pass_transreid_vit_base.pth
+```
+
+market测试
+```bash
+python test.py --config_file configs/market/vit_base.yml MODEL.DEVICE_ID "('0')" TEST.WEIGHT configs/market/pass_transreid_vit_base.pth 
+```
+

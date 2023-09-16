@@ -120,3 +120,19 @@ If you find this code useful for your research, please cite our paper
 ## Contact
 
 If you have any question, please feel free to contact us. E-mail: [kuan.zhu@nlpr.ia.ac.cn](kuan.zhu@nlpr.ia.ac.cn).
+ 环境配置  如果发生
+No module named 'torch._six'
+进行如下替换
+
+#from torch._six import container_abcs
+TORCH_MAJOR = int(torch.__version__.split('.')[0])
+TORCH_MINOR = int(torch.__version__.split('.')[1])
+if TORCH_MAJOR == 1 and TORCH_MINOR < 8:
+    from torch._six import container_abcs
+else:
+    import collections.abc as container_abcs
+
+环境
+1.conda建立一个 3.10的python虚拟环境
+2.pip3 install torch torchvision torchaudio
+3.pip install -r requ.txt

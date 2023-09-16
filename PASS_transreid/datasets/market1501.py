@@ -34,7 +34,7 @@ class Market1501(BaseImageDataset):
 
         self._check_before_run()
         self.pid_begin = pid_begin
-        train = self._process_dir(self.train_dir, relabel=True)
+        train = self._process_dir(self.train_dir, relabel=True) #四元组 图片路径，pid，camid，trackid
         query = self._process_dir(self.query_dir, relabel=False)
         gallery = self._process_dir(self.gallery_dir, relabel=False)
 
