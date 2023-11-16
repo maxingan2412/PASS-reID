@@ -1,10 +1,10 @@
 from utils.logger import setup_logger
-from datasets import make_dataloader
+from datasets import make_dataloader,make_mars_dataloader
 from model import make_model
 from solver import make_optimizer, WarmupMultiStepLR
 from solver.scheduler_factory import create_scheduler
 from loss import make_loss
-from processor import do_train
+from processor import do_train,do_mars_train
 import random
 import torch
 import numpy as np
@@ -66,7 +66,10 @@ if __name__ == '__main__':
 
 
     os.environ['CUDA_VISIBLE_DEVICES'] = cfg.MODEL.DEVICE_ID
-    train_loader, train_loader_normal, val_loader, num_query, num_classes, camera_num, view_num = make_dataloader(cfg)
+    if cfg.DATASETS.NAMES == 'mars':
+        train_loader, num_query, num_classes, camera_num, view_num, q_val_set, g_val_set = make_mars_dataloader(cfg)
+    else:
+        train_loader, train_loader_normal, val_loader, num_query, num_classes, camera_num, view_num = make_dataloader(cfg)
 
     model = make_model(cfg, num_class=num_classes, camera_num=camera_num, view_num = view_num)
     loss_func, center_criterion = make_loss(cfg, num_classes=num_classes)
@@ -80,18 +83,22 @@ if __name__ == '__main__':
         scheduler = WarmupMultiStepLR(optimizer, cfg.SOLVER.STEPS, cfg.SOLVER.GAMMA,
                                       cfg.SOLVER.WARMUP_FACTOR,
                                       cfg.SOLVER.WARMUP_EPOCHS, cfg.SOLVER.WARMUP_METHOD)
+    if cfg.DATASETS.NAMES == 'mars':
+        do_mars_train(cfg, model, center_criterion, train_loader, q_val_set, g_val_set, optimizer, optimizer_center,
+                      scheduler, loss_func, num_query, args.local_rank)
+    else:
 
-    do_train(
-        cfg,
-        model,
-        center_criterion,
-        train_loader,
-        val_loader,
-        optimizer,
-        optimizer_center,
-        scheduler,
-        loss_func,
-        num_query, args.local_rank
-    )
+        do_train(
+            cfg,
+            model,
+            center_criterion,
+            train_loader,
+            val_loader,
+            optimizer,
+            optimizer_center,
+            scheduler,
+            loss_func,
+            num_query, args.local_rank
+        )
     #  print(cfg.OUTPUT_DIR)
     #  print(cfg.MODEL.PRETRAIN_PATH)

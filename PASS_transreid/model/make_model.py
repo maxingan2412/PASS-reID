@@ -5,8 +5,42 @@ import copy
 from .backbones.vit_pytorch import vit_base_patch16_224_TransReID, vit_small_patch16_224_TransReID
 from .backbones.swin_transformer import swin_base_patch4_window7_224, swin_small_patch4_window7_224
 from loss.metric_learning import Arcface, Cosface, AMSoftmax, CircleLoss
-from .backbones.resnet_ibn_a import resnet50_ibn_a,resnet101_ibn_a
+#from PASS_transreid.loss.metric_learning import Arcface, Cosface, AMSoftmax, CircleLoss
 
+from .backbones.resnet_ibn_a import resnet50_ibn_a,resnet101_ibn_a
+import torch.nn.functional as F
+from kmeans_pytorch import kmeans
+
+
+class SelfAttentionPooling(nn.Module):
+    """
+    Implementation of SelfAttentionPooling
+    Original Paper: Self-Attention Encoding and Pooling for Speaker Recognition
+    https://arxiv.org/pdf/2008.01077v1.pdf
+
+    code from https://gist.github.com/pohanchi/c77f6dbfbcbc21c5215acde4f62e4362
+    """
+
+    def __init__(self, input_dim):
+        super(SelfAttentionPooling, self).__init__()
+        self.W = nn.Linear(input_dim, 1)
+
+    def forward(self, x):
+        """
+        input:
+            batch_rep : size (N, T, H), N: batch size, T: sequence length, H: Hidden dimension
+
+        attention_weight:
+            att_w : size (N, T, 1)
+
+        return:
+            utter_rep: size (N, H)
+        """
+
+        # (N, T, H) -> (N, T) -> (N, T, 1)
+        att_w = nn.functional.softmax(self.W(x).squeeze(dim=-1), dim=-1).unsqueeze(dim=-1)
+        x = torch.sum(x * att_w, dim=1)
+        return x
 def shuffle_unit(features, shift, group, begin=1):
 
     batchsize = features.size(0)
@@ -25,7 +59,85 @@ def shuffle_unit(features, shift, group, begin=1):
     x = x.view(batchsize, -1, dim)
 
     return x
+def get_mask(features, clsnum):
+    device = features.device
+    n, c, h, w = features.shape
+    masks = []
+    mask_idxs = []
 
+    for i in range(n):
+        x = features[i]
+        #x = x.permute(1, 2, 0)
+        x = x.reshape(-1, c)
+
+        # foreground/background cluster
+        _x = torch.norm(x, p=2, dim=1, keepdim=True)
+
+        cluster_ids_x, cluster_centers = kmeans(X=_x, num_clusters=2, distance='euclidean', device=device)
+
+        if cluster_centers[0] > cluster_centers[1]:
+            cluster_ids_x = 1 - cluster_ids_x
+
+        bg_mask = (cluster_ids_x == 0).nonzero().squeeze().to(device)
+
+        if bg_mask.numel() <= 0.5 * w * h:
+            continue
+        mask_idxs.append(i)
+
+        # pixel cluster
+        _x = x[bg_mask]
+        cluster_ids_x, _ = kmeans(X=_x, num_clusters=clsnum, distance='euclidean', device=device)
+        _res = cluster_ids_x.to(device)
+        res = torch.zeros(h * w, dtype=torch.long, device=device)
+        res[bg_mask] = _res + 1
+
+        # align
+        res = res.reshape(h, w)
+        ys = []
+        for k in range(1, clsnum + 1):
+            y = (res == k).nonzero(as_tuple=True)[0].float().mean()
+            ys.append(y)
+        ys = torch.stack(ys)
+        y_idxs = torch.argsort(ys) + 1
+        heatmap = torch.zeros_like(res)
+        for k in range(1, clsnum + 1):
+            heatmap[res == y_idxs[k - 1]] = k
+        masks.append(heatmap)
+
+    masks = torch.stack(masks) if len(mask_idxs) > 0 else torch.zeros(0, device=device)
+    mask_idxs = torch.tensor(mask_idxs, device=device) if len(mask_idxs) > 0 else torch.zeros(0, device=device)
+
+    return masks, mask_idxs
+
+
+def extract_tensor_based_on_values(aa, cc):
+    """
+    根据给定的值从张量aa中提取相应的部分。
+
+    参数:
+        aa (torch.Tensor): 输入张量，形状为 [seq, 1024, 12, 4]
+        cc (torch.Tensor): mask张量，形状为 [seq, 12, 4]
+
+    返回:
+        three tensors: 对应于cc中值1、2、3的提取结果，每个形状都是 [1024, n]，其中n是cc中对应值的数量
+    """
+
+    def extract_value(value, aa, cc):
+        temp_results = []
+        for aa_batch, cc_batch in zip(aa, cc):
+            indices = torch.where(cc_batch == value)
+            # 获取符合条件的张量切片
+            masked_data = aa_batch[:, indices[0], indices[1]]
+            temp_results.append(masked_data.reshape(-1, masked_data.shape[-1]))
+
+        all_results = torch.cat(temp_results, dim=1)
+        return all_results
+
+    result1 = extract_value(1, aa, cc)
+    result2 = extract_value(2, aa, cc)
+    result3 = extract_value(3, aa, cc)
+
+    return result1, result2, result3
 def weights_init_xavier(m):
     classname = m.__class__.__name__
     if classname.find('Linear') != -1:
@@ -287,7 +399,7 @@ class build_transformer_pass(nn.Module):
         self.base = factory[cfg.MODEL.TRANSFORMER_TYPE](img_size=cfg.INPUT.SIZE_TRAIN, sie_xishu=cfg.MODEL.SIE_COE, camera=camera_num, view=view_num, stride_size=cfg.MODEL.STRIDE_SIZE, drop_path_rate=cfg.MODEL.DROP_PATH, drop_rate= cfg.MODEL.DROP_OUT,attn_drop_rate=cfg.MODEL.ATT_DROP_RATE, gem_pool=cfg.MODEL.GEM_POOLING, stem_conv=cfg.MODEL.STEM_CONV)
         self.in_planes = self.base.in_planes
         if pretrain_choice == 'imagenet':
-            self.base.load_param(model_path,hw_ratio=cfg.MODEL.PRETRAIN_HW_RATIO)
+            self.base.load_param(model_path,hw_ratio=cfg.MODEL.PRETRAIN_HW_RATIO) # 2
             print(f'Loading pretrained {pretrain_choice} model......from {model_path}')
 
         self.num_classes = num_classes
@@ -564,6 +676,177 @@ class build_transformer_local(nn.Module):
 
 
 
+class build_mars_transformer(nn.Module):
+    def __init__(self, num_classes, camera_num, view_num, cfg, factory):
+        super(build_mars_transformer, self).__init__()
+        last_stride = cfg.MODEL.LAST_STRIDE
+        model_path = cfg.MODEL.PRETRAIN_PATH
+        model_name = cfg.MODEL.NAME
+        pretrain_choice = cfg.MODEL.PRETRAIN_CHOICE
+        self.cos_layer = cfg.MODEL.COS_LAYER
+        self.neck = cfg.MODEL.NECK
+        self.neck_feat = cfg.TEST.NECK_FEAT
+        self.reduce_feat_dim = cfg.MODEL.REDUCE_FEAT_DIM
+        self.feat_dim = cfg.MODEL.FEAT_DIM
+        self.dropout_rate = cfg.MODEL.DROPOUT_RATE
+
+        print('using Transformer_type: {} as a backbone'.format(cfg.MODEL.TRANSFORMER_TYPE))
+
+        if cfg.MODEL.SIE_CAMERA:
+            camera_num = camera_num
+        else:
+            camera_num = 0
+        if cfg.MODEL.SIE_VIEW:
+            view_num = view_num
+        else:
+            view_num = 0
+        # base是 transreid
+        self.base = factory[cfg.MODEL.TRANSFORMER_TYPE](img_size=cfg.INPUT.SIZE_TRAIN, sie_xishu=cfg.MODEL.SIE_COE,
+                                                        camera=camera_num, view=view_num,
+                                                        stride_size=cfg.MODEL.STRIDE_SIZE,
+                                                        drop_path_rate=cfg.MODEL.DROP_PATH,
+                                                        drop_rate=cfg.MODEL.DROP_OUT,
+                                                        attn_drop_rate=cfg.MODEL.ATT_DROP_RATE,
+                                                        gem_pool=cfg.MODEL.GEM_POOLING, stem_conv=cfg.MODEL.STEM_CONV)
+        self.in_planes = self.base.in_planes
+        if pretrain_choice == 'imagenet':
+            self.base.load_param(model_path, hw_ratio=cfg.MODEL.PRETRAIN_HW_RATIO)  # 2
+            print(f'Loading pretrained {pretrain_choice} model......from {model_path}')
+
+        self.num_classes = num_classes
+
+        self.multi_neck = cfg.MODEL.MULTI_NECK
+        self.feat_fusion = cfg.MODEL.FEAT_FUSION
+
+        self.ID_LOSS_TYPE = cfg.MODEL.ID_LOSS_TYPE
+        if self.ID_LOSS_TYPE == 'arcface':
+            print('using {} with s:{}, m: {}'.format(self.ID_LOSS_TYPE, cfg.SOLVER.COSINE_SCALE,
+                                                     cfg.SOLVER.COSINE_MARGIN))
+            self.classifier = Arcface(self.in_planes, self.num_classes,
+                                      s=cfg.SOLVER.COSINE_SCALE, m=cfg.SOLVER.COSINE_MARGIN)
+        elif self.ID_LOSS_TYPE == 'cosface':
+            print('using {} with s:{}, m: {}'.format(self.ID_LOSS_TYPE, cfg.SOLVER.COSINE_SCALE,
+                                                     cfg.SOLVER.COSINE_MARGIN))
+            self.classifier = Cosface(self.in_planes, self.num_classes,
+                                      s=cfg.SOLVER.COSINE_SCALE, m=cfg.SOLVER.COSINE_MARGIN)
+        elif self.ID_LOSS_TYPE == 'amsoftmax':
+            print('using {} with s:{}, m: {}'.format(self.ID_LOSS_TYPE, cfg.SOLVER.COSINE_SCALE,
+                                                     cfg.SOLVER.COSINE_MARGIN))
+            self.classifier = AMSoftmax(self.in_planes, self.num_classes,
+                                        s=cfg.SOLVER.COSINE_SCALE, m=cfg.SOLVER.COSINE_MARGIN)
+        elif self.ID_LOSS_TYPE == 'circle':
+            print('using {} with s:{}, m: {}'.format(self.ID_LOSS_TYPE, cfg.SOLVER.COSINE_SCALE,
+                                                     cfg.SOLVER.COSINE_MARGIN))
+            self.classifier = CircleLoss(self.in_planes, self.num_classes,
+                                         s=cfg.SOLVER.COSINE_SCALE, m=cfg.SOLVER.COSINE_MARGIN)
+        else:
+            if self.feat_fusion == 'cat':
+                self.classifier = nn.Linear(self.in_planes * 2, self.num_classes, bias=False)
+                self.classifier.apply(weights_init_classifier)  # 见笔记 09161
+
+            if self.feat_fusion == 'mean':
+                self.classifier = nn.Linear(self.in_planes, self.num_classes, bias=False)
+                self.classifier.apply(weights_init_classifier)
+
+        if self.multi_neck:
+            self.bottleneck = nn.BatchNorm1d(self.in_planes)
+            self.bottleneck.bias.requires_grad_(False)
+            self.bottleneck.apply(weights_init_kaiming)
+            self.bottleneck_1 = nn.BatchNorm1d(self.in_planes)
+            self.bottleneck_1.bias.requires_grad_(False)
+            self.bottleneck_1.apply(weights_init_kaiming)
+            self.bottleneck_2 = nn.BatchNorm1d(self.in_planes)
+            self.bottleneck_2.bias.requires_grad_(False)
+            self.bottleneck_2.apply(weights_init_kaiming)
+            self.bottleneck_3 = nn.BatchNorm1d(self.in_planes)
+            self.bottleneck_3.bias.requires_grad_(False)
+            self.bottleneck_3.apply(weights_init_kaiming)
+        else:
+            if self.feat_fusion == 'cat':
+                self.bottleneck = nn.BatchNorm1d(self.in_planes * 2)
+                self.bottleneck.bias.requires_grad_(False)
+                self.bottleneck.apply(weights_init_kaiming)
+            elif self.feat_fusion == 'mean':
+                self.bottleneck = nn.BatchNorm1d(self.in_planes)
+                self.bottleneck.bias.requires_grad_(False)
+                self.bottleneck.apply(weights_init_kaiming)
+
+        self.dropout = nn.Dropout(self.dropout_rate)
+
+        if pretrain_choice == 'self':
+            self.load_param(model_path)
+
+
+        ###加入  a_val
+
+
+        #if pretrain_choice == 'self':
+        #    self.load_param(model_path)
+    # input : x tensor bs,3,h,w | label tensor bs  cam_label tensor bs, view_label tensor bs   . x是一个batch的 img label 是personid ， camlabel是camid viewlabel是viewid，在market1501中，camid是1-6，viewid是1-6，personid都是1
+    def forward(self, x, label=None, cam_label= None, view_label=None,clusting_feature=True,temporal_attention=False):
+
+        b=x.size(0) # batch size 32
+        t=x.size(1) # seq 4
+        x = x.view(b * t, x.size(2), x.size(3), x.size(4)) #[32,4,3,256,128] --> [128,3,256,128]
+
+        global_feat, local_feat_1, local_feat_2, local_feat_3 = self.base(x, cam_label=cam_label, view_label=view_label)
+
+
+        global_feat = torch.mean(global_feat.view(-1, t, global_feat.shape[-1]), dim=1)
+        local_feat_1 = torch.mean(local_feat_1.view(-1, t, local_feat_1.shape[-1]), dim=1)
+        local_feat_2 = torch.mean(local_feat_2.view(-1, t, local_feat_2.shape[-1]), dim=1)
+        local_feat_3 = torch.mean(local_feat_3.view(-1, t, local_feat_3.shape[-1]), dim=1)
+
+
+        # single-neck, almost the same performance
+        if not self.multi_neck:
+            if self.feat_fusion == 'mean':
+                final_feat_before = (global_feat + (local_feat_1 / 3. + local_feat_2 / 3. + local_feat_3 / 3.)) / 2
+            elif self.feat_fusion == 'cat':
+                final_feat_before = torch.cat((global_feat, local_feat_1 / 3. + local_feat_2 / 3. + local_feat_3 / 3.),
+                                              dim=1)
+
+            final_feat_after = self.bottleneck(final_feat_before)
+            # multi-neck
+        else:
+            feat = self.bottleneck(global_feat)
+            local_feat_1_bn = self.bottleneck_1(local_feat_1)
+            local_feat_2_bn = self.bottleneck_2(local_feat_2)
+            local_feat_3_bn = self.bottleneck_3(local_feat_3)
+
+            if self.feat_fusion == 'mean':
+                final_feat_before = (global_feat + local_feat_1 / 3 + local_feat_2 / 3 + local_feat_3 / 3) / 2.
+                final_feat_after = (feat + local_feat_1_bn / 3 + local_feat_2_bn / 3 + local_feat_3_bn / 3) / 2.
+            elif self.feat_fusion == 'cat':
+                final_feat_before = torch.cat((global_feat, local_feat_1 / 3. + local_feat_2 / 3. + local_feat_3 / 3.),
+                                              dim=1)
+                final_feat_after = torch.cat((feat, local_feat_1_bn / 3 + local_feat_2_bn / 3 + local_feat_3_bn / 3),
+                                             dim=1)
+
+        if self.training:
+            if self.ID_LOSS_TYPE in ('arcface', 'cosface', 'amsoftmax', 'circle'):
+                cls_score = self.classifier(final_feat_after, label)
+            else:
+                cls_score = self.classifier(final_feat_after)
+
+            return cls_score, final_feat_before #输出位
+        else:
+            if self.neck_feat == 'after':
+                return final_feat_after
+            else:
+                return final_feat_before
+
+
+    def load_param(self, trained_path):
+        param_dict = torch.load(trained_path, map_location = 'cpu')
+        for i in param_dict:
+            try:
+                self.state_dict()[i.replace('module.', '')].copy_(param_dict[i])
+            except:
+                continue
+        print('Loading pretrained model from {}'.format(trained_path))
+
+
 __factory_T_type = {
     'vit_base_patch16_224_TransReID': vit_base_patch16_224_TransReID,
     'deit_base_patch16_224_TransReID': vit_base_patch16_224_TransReID,
@@ -575,11 +858,16 @@ __factory_T_type = {
 
 def make_model(cfg, num_class, camera_num, view_num):
     if cfg.MODEL.NAME == 'transformer':
-        if cfg.MODEL.JPM:
-            model = build_transformer_local(num_class, camera_num, view_num, cfg, __factory_T_type, rearrange=cfg.MODEL.RE_ARRANGE)
-            print('===========building transformer with JPM module ===========')
+        if cfg.DATASETS.NAMES == 'mars':
+            model = build_mars_transformer(num_class, camera_num, view_num, cfg, __factory_T_type)
+            print('===========building mars transformer===========')
         else:
-            model = build_transformer_pass(num_class, camera_num, view_num, cfg, __factory_T_type)
+
+            if cfg.MODEL.JPM:
+                model = build_transformer_local(num_class, camera_num, view_num, cfg, __factory_T_type, rearrange=cfg.MODEL.RE_ARRANGE)
+                print('===========building transformer with JPM module ===========')
+            else:
+                model = build_transformer_pass(num_class, camera_num, view_num, cfg, __factory_T_type)
             print('===========building transformer PASS===========')
     else:
         model = Backbone(num_class, cfg)

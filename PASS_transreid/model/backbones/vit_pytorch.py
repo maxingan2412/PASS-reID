@@ -332,7 +332,7 @@ class TransReID(nn.Module):
         elif self.view_num > 0:
             x = x + self.pos_embed + self.sie_xishu * self.sie_embed[view_id]
         else:
-            x = x + torch.cat((self.cls_pos, self.part1_pos, self.part2_pos, self.part3_pos, self.pos_embed), dim=1) #前四个是 1 1 768 后面是 1 128 768  一共是 1 132 768
+            x = x + torch.cat((self.cls_pos, self.part1_pos, self.part2_pos, self.part3_pos, self.pos_embed), dim=1)
 
         x = self.pos_drop(x)
 

@@ -195,3 +195,63 @@ class RandomIdentitySampler_DDP(Sampler):
     def __len__(self):
         return self.length
 
+class RandomIdentitySampler_mars(Sampler):
+    """
+    Randomly sample N identities, then for each identity,
+    randomly sample K instances, therefore batch size is N*K.
+    Args:
+    - data_source (list): list of (img_path, pid, camid). img_path是图片的路径，pid是图片的id，camid是摄像头的id
+    - num_instances (int): number of instances per identity in a batch.
+    - batch_size (int): number of examples in a batch.
+    """
+    #DataLoader(train_set, batch_size=batchsize,sampler=RandomIdentitySampler(dataset.train, batchsize,4),num_workers=4, collate_fn=train_collate_fn)
+    def __init__(self, data_source, batch_size, num_instances):
+        self.data_source = data_source
+        self.batch_size = batch_size
+        self.num_instances = num_instances
+        self.num_pids_per_batch = self.batch_size // self.num_instances # bs 32 ni 4  结果是8  所以 一个batch里8个pid，32个tracklets 128张图片
+        self.index_dic = defaultdict(list) #dict with list value
+        #{783: [0, 5, 116, 876, 1554, 2041],...,}
+        for index, (_, pid, _) in enumerate(self.data_source):
+            self.index_dic[pid].append(index)  #最后的self.index_dic是一个字典，key是pid，value是这个pid对应的所有图片的index
+        self.pids = list(self.index_dic.keys()) # 0-624 list
+
+        # estimate number of examples in an epoch
+        self.length = 0
+        for pid in self.pids:
+            idxs = self.index_dic[pid]
+            num = len(idxs)
+            if num < self.num_instances:
+                num = self.num_instances
+            self.length += num - num % self.num_instances
+
+    def __iter__(self):
+        batch_idxs_dict = defaultdict(list) # 在你提供的代码段中，batch_idxs_dict 是一个使用 defaultdict 创建的字典，其中的默认值是一个空列表。这意味着当你访问 batch_idxs_dict 中不存在的键时，会自动创建一个空列表作为默认值。
+        # 最后拿到的 batch_idxs_dict 是一个 有625个key的字典，每个key对应一个list，list的长度都不一样，list list里面还是list 长为4， 其中第一层的list的个数也就是告诉你这个id下有多少个tracklets。
+        for pid in self.pids:
+            idxs = copy.deepcopy(self.index_dic[pid]) #copy.deepcopy 是 Python 标准库中的一个函数，用于创建对象的深拷贝。深拷贝是指创建一个新的对象，将原始对象的内容递归复制到新对象中，而不是仅仅复制引用。这意味着新对象与原始对象是独立的，对新对象的修改不会影响原始对象。
+            if len(idxs) < self.num_instances:
+                idxs = np.random.choice(idxs, size=self.num_instances, replace=True)
+            random.shuffle(idxs) # 打乱idxs
+            batch_idxs = []
+            for idx in idxs:  # 这些代码碎按照 num_instances 的长度 构造出batch_idxs_dict
+                batch_idxs.append(idx)
+                if len(batch_idxs) == self.num_instances:
+                    batch_idxs_dict[pid].append(batch_idxs)
+                    batch_idxs = []
+        #batch_idxs_dict是一个625的dict 里面key是pid 对应的是4个一组的图片的索引，顺序是打乱的 比如 原来pid0对应的186张图片 原来这个dict对应的就是186张图的编号，现在变成了46组4个张图。46是list
+        avai_pids = copy.deepcopy(self.pids)
+        final_idxs = []
+
+        while len(avai_pids) >= self.num_pids_per_batch:
+            selected_pids = random.sample(avai_pids, self.num_pids_per_batch) #625的list里面随机选8个
+            for pid in selected_pids:
+                batch_idxs = batch_idxs_dict[pid].pop(0) # pop(0): 这是列表的一个方法，用于从列表中弹出（取出）指定索引位置的元素。在这里，参数 0 表示取出列表的第一个元素
+                final_idxs.extend(batch_idxs)
+                if len(batch_idxs_dict[pid]) == 0:
+                    avai_pids.remove(pid)
+
+        return iter(final_idxs) # iter() 是一个内置函数，它用于创建一个迭代器对象，可以用于遍历可迭代对象（如列表、元组、字典等）的元素。迭代器对象可以通过 next() 函数逐个返回元素，直到没有元素可遍历为止。
+
+    def __len__(self):
+        return self.length
